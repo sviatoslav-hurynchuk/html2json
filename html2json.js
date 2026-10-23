@@ -150,11 +150,12 @@ function html2json(htmlText) {
   // Top-level try/catch: no matter what pathological input is thrown at us,
   // we return a valid document object instead of propagating an exception.
   try {
-    const root       = { type: 'document', children: [] };
-    const stack      = [root];
-    const openCounts = new Map();
-    let   pos        = 0;
-    const len        = htmlText.length;
+    const root           = { type: 'document', children: [] };
+    const stack          = [root];
+    const openCounts     = new Map();
+    let   pos            = 0;
+    const len            = htmlText.length;
+    let   noPiTerminator = false;
 
     while (pos < len) {
 
@@ -215,7 +216,11 @@ function html2json(htmlText) {
 
       // ── Processing instruction `<?…?>` (XML prologue etc.) ──
       if (pos + 1 < len && htmlText[pos + 1] === '?') {
-        const piEnd = htmlText.indexOf('?>', pos + 2);
+        // Once a scan finds no `?>`, no later `<?` can find one either.
+        // Skipping repeated scans keeps runtime linear on unterminated PIs.
+        const piEnd = noPiTerminator ? -1 : htmlText.indexOf('?>', pos + 2);
+        if (piEnd === -1) noPiTerminator = true;
+
         if (piEnd !== -1) {
           pos = piEnd + 2;
         } else {
