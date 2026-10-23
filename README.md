@@ -1,34 +1,178 @@
-# Jito's Software Development Intern "html2json" Test Task
+# html2json — Pure JavaScript HTML-to-JSON Converter
 
-## Task Rationale
-This task is designed to evaluate how well you solve problems without having every detail explicitly provided and to assess the quality of your deliverables. This type of task isn't necessarily reflective of your future work but aims to help us understand your thought process and reasoning in the context of software development.
+A zero-dependency, crash-proof HTML parser that converts any HTML string into a JSON AST (Abstract Syntax Tree). Built entirely in pure JavaScript — no `DOMParser`, no browser DOM APIs, no third-party libraries.
 
-## Assignment
-Your task is to implement a function called `html2json`, which converts HTML data into a JSON representation.
-AI tools usage is <b>REQUIRED</b>. Is is required that you provide your entire conversation history by attaching a link to the dialogue. Therefore, keep all your research within a single conversation and submit the link along with your task.
+## Quick Start
 
-## Expected repository structure
-- `html2json.js` - This file should contain your implementation of the html2json function.
-- `html_samples/` folder - Include files with a text that you used as samples to test your function.
-- `index.html` - The initial file we provided. You can leave it unchanged, but please include it in the archive.
-- `ai_help/` folder - If you used any resources for code generation:
-- Create a file named `chatgpt_chat.txt` with a link to the ChatGPT chat used.
-- For any other AI resources, attach relevant `.pdf`, `.png`, or `.mp4` files showing how you used them.
-- You can optionally update `README.md` completely if you want to add explanations of your reasoning or any other comments.
+### Visual testing (browser)
 
-## Key Points for Evaluation
-- Coverage of various HTML structures and different sizes.
-- The code <b>MUST NOT</b> crash.
-- Code cleanliness and formatting.
-- Using a DOM parser is not allowed.
-- How effectively you handled unexpected scenarios, such as situations where your code received valid HTML but still crashed or produced incorrect results. We will evaluate your ability to anticipate edge cases and ensure robustness in your solution.
+Open `index.html` in any browser. Paste HTML into the left textarea and click **Convert to JSON**. Two built-in examples are available via the buttons.
 
-## P.S. from the team
-Please focus on quality rather than speed. Quality in this context means ensuring your solution is well thought-out, robust, and free of obvious issues. The speed of delivery will <b>NOT</b> be prioritized, so take the necessary time to research and refine your approach, as long as you complete the task within the specified timeframe.
-Before submitting your final results, double or even triple-check everything:
-- Verify that all links you provide are accessible in incognito mode, as broken links will result in your submission <b>NOT</b> being reviewed.
-- Just before submitting, test your code again to ensure it still functions correctly and handles the html samples without crashing. If your code crashes or fails on your own samples, it will be treated as a failed submission.
-- Make sure all items are included according to the [Expected Deliverables](#expected-deliverables) section. If any required files or information are missing, we will <b>NOT</b> be able to review your task, and it will be <ins>treated as failed</ins>.
-- Jito’s senior developer will thoroughly review your solution. Based on this review, if deemed appropriate, you may be invited for a technical code review. This will include questions about the code, your understanding, and the reasoning behind your solution choices.
-- The best indicator that you’ve done your best is the feeling of confidence when submitting, knowing that you have thoroughly checked your work and cannot think of anything more to improve.
-- You can view test task template [here](https://jito-dev.github.io/jito-intern-test-task/)
+### Automated tests (Node.js)
+
+```bash
+node test_html2json.js
+```
+
+Runs 66 assertions covering input validation, all 10 sample files, structural correctness, and crash resilience. Exit code `0` = all passed.
+
+---
+
+## AST Schema Design
+
+The parser produces a tree of nodes. Every node carries a discriminated `type` field so consumers can process the tree with a simple `switch (node.type)` — no guessing, no `instanceof`, no duck-typing.
+
+### Why this schema?
+
+Three approaches were evaluated:
+
+| Criterion | htmlparser2-style (flat) | parse5-style (W3C DOM) | **Chosen (hybrid)** |
+|---|:---:|:---:|:---:|
+| Readability | ⭐⭐⭐ | ⭐ | ⭐⭐⭐ |
+| Node order preservation | ⭐⭐⭐ | ⭐⭐⭐ | ⭐⭐⭐ |
+| Attribute ergonomics | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+| Doctype / comment support | ❌ | ⭐⭐⭐ | ⭐⭐⭐ |
+| JSON-serialisable (no circular refs) | ⭐⭐⭐ | ⭐⭐ | ⭐⭐⭐ |
+
+**Key decisions:**
+
+- **`type` discriminator** — instant identification of any node without inspecting its shape.
+- **`attributes` as a flat `{}` object** — covers 99.9% of real-world HTML and enables `node.attributes.href` access instead of array-scanning. Trade-off: duplicate attribute names collapse with a last-wins policy. This is an AST convention and differs from HTML tokenization, which keeps the first occurrence.
+- **`children` as an ordered `[]` array** — preserves exact sibling order of elements, text, and comments, which is critical for faithful HTML representation.
+- **`document` root** — always wraps the output so that fragments with multiple top-level nodes (`<p>A</p><p>B</p>`) produce a valid single-root tree.
+
+### Node types
+
+```
+document  → { type: "document", children: [...] }
+element   → { type: "element",  tag, attributes, children, selfClosing? }
+text      → { type: "text",     content }
+comment   → { type: "comment",  content }
+doctype   → { type: "doctype",  content }
+cdata     → { type: "cdata",    content }
+```
+
+### Example
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+  <body>
+    <!-- greeting -->
+    <h1 class="title">Hello</h1>
+    <br/>
+  </body>
+</html>
+```
+
+```json
+{
+  "type": "document",
+  "children": [
+    { "type": "doctype", "content": "html" },
+    {
+      "type": "element", "tag": "html", "attributes": { "lang": "en" },
+      "children": [
+        {
+          "type": "element", "tag": "body", "attributes": {},
+          "children": [
+            { "type": "comment", "content": " greeting " },
+            {
+              "type": "element", "tag": "h1",
+              "attributes": { "class": "title" },
+              "children": [{ "type": "text", "content": "Hello" }]
+            },
+            {
+              "type": "element", "tag": "br", "attributes": {},
+              "children": [], "selfClosing": true
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+## No-Crash Architecture
+
+The code **MUST NOT crash** on any input. This is achieved through four layers of defence:
+
+### Layer 1 — Input validation
+
+`null`, `undefined`, numbers, objects, arrays — anything that isn't a string returns `{ type: "document", children: [] }` immediately.
+
+### Layer 2 — Graceful handling of broken HTML
+
+| Scenario | Strategy |
+|---|---|
+| Unclosed tags (`<div><p>text`) | Remain on the stack; the tree is structurally valid (just not closed) |
+| Stray closing tags (`</span>` without an opener) | `closeTag()` scans the stack, finds no match, silently ignores |
+| Mismatched nesting (`<b><i>…</b></i>`) | Closing `</b>` pops both `<i>` and `<b>` — implicit auto-close |
+| `<` not followed by a letter (`3 < 5`) | Emitted as literal text, not treated as a tag |
+| Incomplete tag at EOF (`<div class="oops`) | Attribute parser runs to end-of-string, returns what it could parse |
+| Unknown `<!…>` declarations | Skipped to the next `>` |
+| Unterminated comments (`<!-- no end`) | Content consumed to EOF |
+
+### Layer 3 — Iterative algorithms
+
+`filterWhitespace()` uses an explicit stack (`queue.pop()`) instead of recursion, preventing call-stack overflow on adversarially deep nesting (tested with 200+ levels).
+
+### Layer 4 — Top-level `try/catch`
+
+The entire `html2json()` body is wrapped in a `try/catch`. If any unforeseen error escapes layers 1–3, the catch returns a valid empty document instead of throwing.
+
+---
+
+## Feature Overview
+
+| Feature | Details |
+|---|---|
+| Void elements | All 14 HTML5 void tags + explicit `<tag/>` syntax |
+| Raw-text elements | `<script>`, `<style>`, `<textarea>` — inner content not parsed as HTML |
+| Attributes | Double-quoted, single-quoted, unquoted, boolean (`disabled` → `true`) |
+| Tag normalisation | All tag and attribute names lowercased |
+| Whitespace filtering | Text nodes consisting entirely of whitespace are removed |
+| Comments | `<!-- … -->` preserved with content |
+| Doctype | `<!DOCTYPE …>` captured |
+| CDATA | `<![CDATA[ … ]]>` captured |
+| Processing instructions | `<?xml …?>` silently skipped |
+| Custom elements | `<my-widget>` (hyphenated names supported) |
+| XML namespaces | `<svg:rect>` (colon-separated names supported) |
+
+---
+
+## Test Samples
+
+The `html_samples/` directory contains 10 files, each targeting a specific category:
+
+| File | What it tests |
+|---|---|
+| `01_full_page.html` | Complete HTML5 page: head, body, nav, sections, footer, inline script |
+| `02_void_elements.html` | All 14 void tags: `<br>`, `<br/>`, `<br />`, `<img>`, `<input>`, etc. |
+| `03_attributes.html` | Quoting styles, boolean attrs, URLs with `?`, `&`, `#`, empty values |
+| `04_comments_doctype.html` | Single-line, multi-line, and empty comments; doctype variations |
+| `05_broken_html.html` | Unclosed tags, stray closers, mismatched nesting, non-tag `<`, incomplete tags |
+| `06_script_style.html` | JS/CSS with `<`, `>`, template literals inside script/style; textarea raw text |
+| `07_mixed_content.html` | Inline text interleaved with elements; HTML entities; plain text without tags |
+| `08_tables_lists.html` | Tables (thead/tbody/tfoot, rowspan/colspan), definition lists, nested lists |
+| `09_svg_mathml_custom.html` | SVG, MathML, custom elements, namespaced attributes, CDATA, XML PI |
+| `10_edge_cases.html` | Uppercase/mixed-case tags, fragments, rapid open/close, 20 siblings |
+
+---
+
+## Repository Structure
+
+```
+├── html2json.js           Main implementation
+├── index.html             Browser UI (provided by Jito, unchanged)
+├── test_html2json.js      Automated test suite (66 assertions)
+├── html_samples/          10 HTML files for testing
+│   ├── 01_full_page.html
+│   ├── ...
+│   └── 10_edge_cases.html
+├── ai_help/               AI conversation artifacts
+└── README.md              This file
+```

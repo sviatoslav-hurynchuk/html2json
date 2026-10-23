@@ -1,0 +1,33 @@
+<!-- Attributes: various quoting styles and edge cases -->
+
+<!-- Double-quoted -->
+<div class="card main" id="container-1" data-value="hello world"></div>
+
+<!-- Single-quoted -->
+<div class='card' id='box' data-info='it is a "quoted" value'></div>
+
+<!-- Unquoted -->
+<div class=card id=main></div>
+
+<!-- Boolean attributes -->
+<input type="text" disabled readonly required>
+<details open>
+    <summary>Click to expand</summary>
+    <p>Hidden content here.</p>
+</details>
+<video controls autoplay muted loop></video>
+
+<!-- URL with special characters -->
+<a href="https://example.com/search?q=hello+world&lang=en&page=1#results">Link 1</a>
+<a href='https://example.com/path?a=1&b=2&c=3'>Link 2</a>
+<a href=https://example.com/simple>Link 3</a>
+<a href=https://example.com/>Link 4 (trailing slash)</a>
+
+<!-- Mixed quoting and boolean -->
+<input type="range" min='0' max=100 step="0.5" value=50 disabled>
+
+<!-- Empty attribute values -->
+<div data-empty="" class=""></div>
+
+<!-- Attribute with special chars in value -->
+<div title="Line 1&#10;Line 2" data-json='{"key":"value"}'></div>
