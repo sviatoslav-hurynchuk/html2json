@@ -135,6 +135,14 @@ section('Structural assertions');
     '<img> has correct attributes');
 }
 
+// 3c2. Void element with unquoted attribute and immediate self-closing slash
+{
+  const r = html2json('<img src=pic.png/>');
+  const img = r.children[0];
+  assert(img.tag === 'img' && img.attributes.src === 'pic.png' && img.selfClosing === true,
+    '<img src=pic.png/> strips trailing slash from unquoted value and sets selfClosing');
+}
+
 // 3d.  Self-closing syntax
 {
   const r = html2json('<br/><br />');
@@ -300,6 +308,17 @@ section('Crash resilience');
   let crashed = false;
   try { html2json('<<< >>> <> </> <123> <.>'); } catch(e) { crashed = true; }
   assert(!crashed, 'random angle brackets do not crash');
+}
+
+// 4k.  ReDoS resistance on long whitespace & script tags
+{
+  const start = Date.now();
+  const evilScript = '<script>' + ' var x = 1; '.repeat(5000) + '</script>';
+  html2json(evilScript);
+  const evilWhitespace = '<div>' + '   \t\n  '.repeat(10000) + '<p>ok</p></div>';
+  html2json(evilWhitespace);
+  const elapsed = Date.now() - start;
+  assert(elapsed < 1000, `ReDoS check finished in ${elapsed}ms (< 1000ms)`);
 }
 
 // ============================================================
