@@ -37,7 +37,7 @@ Three approaches were evaluated:
 **Key decisions:**
 
 - **`type` discriminator** — instant identification of any node without inspecting its shape.
-- **`attributes` as a flat `{}` object** — covers 99.9% of real-world HTML and enables `node.attributes.href` access instead of array-scanning. Trade-off: duplicate attribute names collapse (last-wins), which matches browser behaviour anyway.
+- **`attributes` as a flat `{}` object** — covers 99.9% of real-world HTML and enables `node.attributes.href` access instead of array-scanning. Trade-off: duplicate attribute names collapse with a last-wins policy. This is an AST convention and differs from HTML tokenization, which keeps the first occurrence.
 - **`children` as an ordered `[]` array** — preserves exact sibling order of elements, text, and comments, which is critical for faithful HTML representation.
 - **`document` root** — always wraps the output so that fragments with multiple top-level nodes (`<p>A</p><p>B</p>`) produce a valid single-root tree.
 
