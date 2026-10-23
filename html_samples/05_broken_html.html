@@ -1,0 +1,43 @@
+<!-- Broken / malformed HTML — parser MUST NOT crash -->
+
+<!-- Unclosed tags -->
+<div>
+    <p>This paragraph is never closed
+    <span>This span is also unclosed
+    <p>A new paragraph auto-closes the previous one... or not
+</div>
+
+<!-- Extra / stray closing tags -->
+</span>
+</div>
+</nonexistent>
+</p>
+</body>
+
+<!-- Mismatched nesting -->
+<b><i>Bold and italic</b></i>
+
+<!-- Tag-like sequences that are not tags -->
+3 < 5 and 10 > 7
+a<b but not a tag because of the space
+Email: user@example.com
+
+<!-- Empty tags -->
+<div></div>
+<span></span>
+<p></p>
+
+<!-- Deeply nested -->
+<div><div><div><div><div><div><div><div><div><div>
+    Deep content
+</div></div></div></div></div></div></div></div></div></div>
+
+<!-- Self-closing non-void tags (XHTML style) -->
+<div />
+<span />
+
+<!-- Tag with no attributes and immediate close -->
+<>not a tag</>
+
+<!-- Incomplete tag at end of input -->
+<div class="oops

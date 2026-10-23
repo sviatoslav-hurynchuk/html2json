@@ -1,0 +1,44 @@
+<!-- Script and Style raw text handling -->
+
+<style>
+    body {
+        font-family: "Helvetica Neue", Arial, sans-serif;
+        background: #f0f0f0;
+    }
+    .container > .child {
+        color: red;
+    }
+    /* a < b > c is valid in CSS comments */
+    p::before { content: "<tag>"; }
+</style>
+
+<script>
+    // JavaScript with HTML-like content
+    var html = "<div class='test'>Hello</div>";
+    var condition = (5 < 10 && 10 > 5);
+    console.log("This has <tags> inside a string");
+
+    function render() {
+        return '<p>' + text + '</p>';
+    }
+</script>
+
+<div>
+    <p>Content between script/style blocks</p>
+</div>
+
+<script type="module">
+    import { something } from './module.js';
+    const x = `template <literal>`;
+</script>
+
+<style media="print">
+    @media print {
+        .no-print { display: none; }
+    }
+</style>
+
+<!-- Textarea also treated as raw text -->
+<textarea id="code-editor" rows="10" cols="80"><div>This should NOT be parsed as HTML</div>
+<script>alert('hi')</script>
+It's all just text here: < > & " '</textarea>
