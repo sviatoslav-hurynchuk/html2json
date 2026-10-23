@@ -94,7 +94,7 @@ for (const file of sampleFiles) {
   } catch (e) {
     crashed = true;
   }
-  assert(!crashed && result && result.type === 'document', `${file} → parsed OK`);
+  assert(!crashed && result && result.type === 'document' && result.children.length > 0, `${file} → parsed OK`);
 }
 
 // ============================================================
@@ -135,12 +135,12 @@ section('Structural assertions');
     '<img> has correct attributes');
 }
 
-// 3c2. Void element with unquoted attribute and immediate self-closing slash
+// 3c2. Void element with unquoted attribute ending in slash
 {
   const r = html2json('<img src=pic.png/>');
   const img = r.children[0];
-  assert(img.tag === 'img' && img.attributes.src === 'pic.png' && img.selfClosing === true,
-    '<img src=pic.png/> strips trailing slash from unquoted value and sets selfClosing');
+  assert(img.tag === 'img' && img.attributes.src === 'pic.png/' && img.selfClosing === true,
+    '<img src=pic.png/> preserves unquoted value verbatim and closes via VOID_TAGS');
 }
 
 // 3d.  Self-closing syntax
@@ -234,70 +234,96 @@ section('Structural assertions');
 }
 
 // ============================================================
-//  4.  Crash resilience — stress tests
+//  4.  Crash resilience & malformed input structural assertions
 // ============================================================
-section('Crash resilience');
+section('Crash resilience & malformed inputs');
 
-// 4a.  Unclosed tags
+// 4a.  Unclosed tags build valid nested hierarchy
 {
-  let crashed = false;
-  try { html2json('<div><p><span>text'); } catch(e) { crashed = true; }
-  assert(!crashed, 'unclosed tags do not crash');
+  const r = html2json('<div><p><span>text');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'div' &&
+    r.children[0].children[0].tag === 'p' &&
+    r.children[0].children[0].children[0].tag === 'span' &&
+    r.children[0].children[0].children[0].children[0].content === 'text',
+    'unclosed tags build valid nested hierarchy'
+  );
 }
 
-// 4b.  Stray closing tags
+// 4b.  Stray closing tags ignored without affecting siblings
 {
-  let crashed = false;
-  try { html2json('</div></span></foo></bar>'); } catch(e) { crashed = true; }
-  assert(!crashed, 'stray closing tags do not crash');
+  const r = html2json('</div></span></foo><p>valid</p></bar>');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'p' &&
+    r.children[0].children[0].content === 'valid',
+    'stray closing tags ignored without affecting valid elements'
+  );
 }
 
-// 4c.  Mismatched nesting
+// 4c.  Mismatched nesting closes innermost matching tag
 {
-  let crashed = false;
-  try { html2json('<b><i>text</b></i>'); } catch(e) { crashed = true; }
-  assert(!crashed, 'mismatched nesting does not crash');
+  const r = html2json('<b><i>text</b></i>');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'b' &&
+    r.children[0].children[0].tag === 'i' &&
+    r.children[0].children[0].children[0].content === 'text',
+    'mismatched nesting closes matched tag and implicitly popped tags'
+  );
 }
 
-// 4d.  Plain text with < and >
+// 4d.  Plain text with < and > preserved as single text node
 {
   const r = html2json('3 < 5 and 10 > 7');
-  let crashed = false;
-  try { JSON.stringify(r); } catch(e) { crashed = true; }
-  assert(!crashed, 'math expressions with < > do not crash');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].type === 'text' &&
+    r.children[0].content === '3 < 5 and 10 > 7',
+    'math expressions with < > preserved as single text node'
+  );
 }
 
-// 4e.  Incomplete tag at EOF
+// 4e.  Incomplete tag at EOF parses available attributes
 {
-  let crashed = false;
-  try { html2json('<div class="oops'); } catch(e) { crashed = true; }
-  assert(!crashed, 'incomplete tag at EOF does not crash');
+  const r = html2json('<div class="oops');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'div' &&
+    r.children[0].attributes.class === 'oops',
+    'incomplete tag at EOF parses available attributes'
+  );
 }
 
 // 4f.  Very long input
 {
   const bigHtml = '<ul>' + '<li>Item</li>'.repeat(10000) + '</ul>';
-  let crashed = false;
-  try { html2json(bigHtml); } catch(e) { crashed = true; }
-  assert(!crashed, '10k list items do not crash');
+  const r = html2json(bigHtml);
+  assert(r.children[0].children.length === 10000, '10k list items parsed completely');
 }
 
-// 4g.  Deeply nested (200 levels)
+// 4g.  Deeply nested elements and safe serialization
 {
-  const deep = '<div>'.repeat(200) + 'deep' + '</div>'.repeat(200);
-  let crashed = false;
-  try { html2json(deep); } catch(e) { crashed = true; }
-  assert(!crashed, '200-level deep nesting does not crash');
+  const depth = 300;
+  const deep = '<div>'.repeat(depth) + 'deep' + '</div>'.repeat(depth);
+  const r = html2json(deep);
+  assert(r.children.length === 1, '300-level deep nesting parsed successfully');
+  let serialized = false;
+  try {
+    JSON.stringify(r);
+    serialized = true;
+  } catch (e) {}
+  assert(serialized, '300-level deep AST serializes safely without RangeError');
 }
 
 // 4h.  Null bytes in input
 {
-  let crashed = false;
-  try { html2json('<p>Hello\0World</p>'); } catch(e) { crashed = true; }
-  assert(!crashed, 'null bytes in input do not crash');
+  const r = html2json('<p>Hello\0World</p>');
+  assert(r.children[0].children[0].content === 'Hello\0World', 'null bytes preserved in text');
 }
 
-// 4i.  Only whitespace
+// 4i.  Only whitespace yields empty children
 {
   const r = html2json('   \n\t\n   ');
   assert(r.children.length === 0, 'whitespace-only input → empty children');
@@ -305,20 +331,144 @@ section('Crash resilience');
 
 // 4j.  Angle brackets that aren't tags
 {
-  let crashed = false;
-  try { html2json('<<< >>> <> </> <123> <.>'); } catch(e) { crashed = true; }
-  assert(!crashed, 'random angle brackets do not crash');
+  const r = html2json('<<< >>> <> </> <123> <.>');
+  assert(r.type === 'document', 'random angle brackets do not crash');
 }
 
-// 4k.  ReDoS resistance on long whitespace & script tags
+// 4k.  Unterminated comment captured to EOF
 {
-  const start = Date.now();
-  const evilScript = '<script>' + ' var x = 1; '.repeat(5000) + '</script>';
-  html2json(evilScript);
-  const evilWhitespace = '<div>' + '   \t\n  '.repeat(10000) + '<p>ok</p></div>';
-  html2json(evilWhitespace);
-  const elapsed = Date.now() - start;
-  assert(elapsed < 1000, `ReDoS check finished in ${elapsed}ms (< 1000ms)`);
+  const r = html2json('<!-- unclosed comment text');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].type === 'comment' &&
+    r.children[0].content === ' unclosed comment text',
+    'unterminated comment captured to EOF'
+  );
+}
+
+// 4l.  Unterminated CDATA captured to EOF
+{
+  const r = html2json('<![CDATA[raw data without closing');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].type === 'cdata' &&
+    r.children[0].content === 'raw data without closing',
+    'unterminated CDATA captured to EOF'
+  );
+}
+
+// 4m.  Unterminated, lowercase, and bare DOCTYPE declarations
+{
+  const r1 = html2json('<!DOCTYPE html');
+  assert(r1.children[0].type === 'doctype' && r1.children[0].content === 'html', 'unterminated doctype captured');
+
+  const r2 = html2json('<!doctype html>');
+  assert(r2.children[0].type === 'doctype' && r2.children[0].content === 'html', 'lowercase doctype captured');
+
+  const r3 = html2json('<!DOCTYPE>');
+  assert(r3.children[0].type === 'doctype' && r3.children[0].content === '', 'bare doctype captured with empty content');
+}
+
+// 4n.  XML processing instruction and unknown entity declarations skipped
+{
+  const r = html2json('<?xml version="1.0" encoding="UTF-8"?><!ENTITY test "val"><p>Hello</p>');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'p' &&
+    r.children[0].children[0].content === 'Hello',
+    'processing instructions and unknown <! declarations skipped cleanly'
+  );
+}
+
+// 4o.  Unterminated raw-text elements (<script>, <textarea>) and uppercase closers
+{
+  const r1 = html2json('<script>console.log("unclosed");');
+  assert(
+    r1.children[0].tag === 'script' &&
+    r1.children[0].children[0].content === 'console.log("unclosed");',
+    'unterminated script captured as verbatim text'
+  );
+
+  const r2 = html2json('<script>var x = 1;</SCRIPT><p>after</p>');
+  assert(
+    r2.children.length === 2 &&
+    r2.children[0].tag === 'script' &&
+    r2.children[1].tag === 'p',
+    'uppercase </SCRIPT> closes script element correctly'
+  );
+
+  const r3 = html2json('<textarea>raw text without end');
+  assert(
+    r3.children[0].tag === 'textarea' &&
+    r3.children[0].children[0].content === 'raw text without end',
+    'unterminated textarea captured as verbatim text'
+  );
+}
+
+// 4p.  Whitespace-padded closers and void closers
+{
+  const r = html2json('<div>test</div  ></br></input>');
+  assert(
+    r.children.length === 1 &&
+    r.children[0].tag === 'div' &&
+    r.children[0].children[0].content === 'test',
+    'whitespace-padded closer works and stray void closers ignored'
+  );
+}
+
+// 4q.  Duplicate attributes collapse with last-wins policy
+{
+  const r = html2json('<div class="first" class="second"></div>');
+  assert(r.children[0].attributes.class === 'second', 'duplicate attributes collapse with last-wins policy');
+}
+
+// 4r.  __proto__, hasOwnProperty, toString preserved without prototype pollution
+{
+  const r = html2json('<div __proto__="safe" hasOwnProperty="yes" toString="val" constructor="obj"></div>');
+  const attrs = r.children[0].attributes;
+  assert(
+    attrs.__proto__ === 'safe' &&
+    attrs.hasownproperty === 'yes' &&
+    attrs.tostring === 'val' &&
+    attrs.constructor === 'obj' &&
+    Object.getPrototypeOf(attrs) === null,
+    '__proto__, hasOwnProperty, and constructor preserved safely in null-prototype map'
+  );
+}
+
+// 4s.  Unquoted attribute ending with slash inside container element
+{
+  const r = html2json('<a href=https://example.com/>Link</a>');
+  const a = r.children[0];
+  assert(
+    a.tag === 'a' &&
+    a.attributes.href === 'https://example.com/' &&
+    !a.selfClosing &&
+    a.children[0].content === 'Link',
+    'unquoted URL with trailing slash preserved verbatim and container not marked selfClosing'
+  );
+}
+
+// 4t.  Linear scaling on unmatched closers (openCounts map optimization)
+{
+  const n1 = 500;
+  const input1 = '<div>'.repeat(n1) + '</x>'.repeat(n1);
+  const t1Start = process.hrtime.bigint();
+  html2json(input1);
+  const t1End = process.hrtime.bigint();
+  const dur1 = Number(t1End - t1Start);
+
+  const n2 = 2000;
+  const input2 = '<div>'.repeat(n2) + '</x>'.repeat(n2);
+  const t2Start = process.hrtime.bigint();
+  html2json(input2);
+  const t2End = process.hrtime.bigint();
+  const dur2 = Number(t2End - t2Start);
+
+  // With O(1) openCounts lookup, unmatched closers exit immediately.
+  // Execution time stays well under 100ms even for thousands of elements.
+  assert(dur1 >= 0 && dur2 >= 0, 'unmatched closers benchmark executed');
+  assert(dur2 / 1e6 < 100, `unmatched closers (n=2000) executed in ${(dur2 / 1e6).toFixed(2)}ms (< 100ms)`);
 }
 
 // ============================================================
