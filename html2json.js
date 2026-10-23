@@ -32,17 +32,23 @@ function addTextChild(stack, text) {
   }
 }
 
-// Searches the stack top-to-bottom.  If a match is found, everything
+// Searches the stack top-to-bottom. If a match is found, everything
 // above it is implicitly closed (handles `<b><i>…</b></i>` pattern).
-// If no match exists the stray closer is silently ignored.
+// Using openCounts gives O(1) early exit when the tag is not open,
+// preventing quadratic scan on unmatched closing tags.
 // Index 0 (document root) is never popped — this is the invariant
 // that guarantees we always have a valid parent to attach nodes to.
-function closeTag(stack, tagName) {
-  for (let i = stack.length - 1; i >= 1; i--) {
-    if (stack[i].tag === tagName) {
-      stack.length = i;
-      return;
+function closeTag(stack, openCounts, tagName) {
+  if (!openCounts.get(tagName)) return;
+  while (stack.length > 1) {
+    const node = stack.pop();
+    const count = openCounts.get(node.tag) - 1;
+    if (count > 0) {
+      openCounts.set(node.tag, count);
+    } else {
+      openCounts.delete(node.tag);
     }
+    if (node.tag === tagName) return;
   }
 }
 
@@ -53,7 +59,9 @@ function closeTag(stack, tagName) {
  */
 function parseAttributes(html, pos) {
   const len        = html.length;
-  const attributes = {};
+  // Use null-prototype object so attributes like __proto__, hasOwnProperty,
+  // or toString become normal own properties without prototype pollution.
+  const attributes = Object.create(null);
   let   i          = pos;
   let   selfClosing = false;
 
@@ -89,15 +97,11 @@ function parseAttributes(html, pos) {
         value = html.slice(valStart, i);
         if (i < len) i++;
       } else {
-        // Unquoted values terminate at whitespace or `>` (HTML5 spec §12.1.2.3)
+        // Unquoted values terminate at whitespace or `>` (HTML5 spec §12.1.2.3).
+        // Any `/` inside (e.g. href=https://example.com/) is kept verbatim.
         const valStart = i;
         while (i < len && !/[\s>]/.test(html[i])) i++;
         value = html.slice(valStart, i);
-        // Trailing slash in `<img src=pic.png/>` belongs to `/>` self-closing syntax
-        if (value.endsWith('/') && i < len && html[i] === '>') {
-          value = value.slice(0, -1);
-          selfClosing = true;
-        }
       }
 
       attributes[attrName] = value;
@@ -146,10 +150,11 @@ function html2json(htmlText) {
   // Top-level try/catch: no matter what pathological input is thrown at us,
   // we return a valid document object instead of propagating an exception.
   try {
-    const root  = { type: 'document', children: [] };
-    const stack = [root];
-    let   pos   = 0;
-    const len   = htmlText.length;
+    const root       = { type: 'document', children: [] };
+    const stack      = [root];
+    const openCounts = new Map();
+    let   pos        = 0;
+    const len        = htmlText.length;
 
     while (pos < len) {
 
@@ -234,7 +239,7 @@ function html2json(htmlText) {
             .trim()
             .split(/[\s\/]/)[0]
             .toLowerCase();
-          if (tagName) closeTag(stack, tagName);
+          if (tagName) closeTag(stack, openCounts, tagName);
           pos = endIdx + 1;
         }
         continue;
@@ -297,6 +302,7 @@ function html2json(htmlText) {
 
       addChild(stack, node);
       stack.push(node);
+      openCounts.set(tagName, (openCounts.get(tagName) || 0) + 1);
       pos = end;
     }
 
@@ -312,10 +318,22 @@ function html2json(htmlText) {
 // ── UI helpers (required by index.html) ──
 
 function convertHtml2JsonAndSet() {
-  const htmlTextAreaValue = document.getElementById("html").value;
-  const jsonObj = html2json(htmlTextAreaValue);
-  const jsonArea = document.getElementById("json");
-  jsonArea.textContent = JSON.stringify(jsonObj, null, 2);
+  try {
+    const htmlTextAreaValue = document.getElementById("html").value;
+    const jsonObj = html2json(htmlTextAreaValue);
+    const jsonArea = document.getElementById("json");
+    try {
+      jsonArea.textContent = JSON.stringify(jsonObj, null, 2);
+    } catch (_serErr) {
+      jsonArea.textContent = JSON.stringify({
+        warning: "AST exceeds native JSON.stringify recursion depth limit",
+        type: jsonObj.type,
+        rootChildrenCount: jsonObj.children ? jsonObj.children.length : 0
+      }, null, 2);
+    }
+  } catch (_err) {
+    // UI safety net
+  }
 }
 
 function showExample1() {
