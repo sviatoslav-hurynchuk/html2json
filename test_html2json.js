@@ -332,7 +332,13 @@ section('Crash resilience & malformed inputs');
 // 4j.  Angle brackets that aren't tags
 {
   const r = html2json('<<< >>> <> </> <123> <.>');
-  assert(r.type === 'document', 'random angle brackets do not crash');
+  assert(
+    r.type === 'document' &&
+    r.children.length === 1 &&
+    r.children[0].type === 'text' &&
+    r.children[0].content === '<<< >>> <>  <123> <.>',
+    'random angle brackets become a single text node without crashing'
+  );
 }
 
 // 4k.  Unterminated comment captured to EOF
@@ -451,24 +457,45 @@ section('Crash resilience & malformed inputs');
 
 // 4t.  Linear scaling on unmatched closers (openCounts map optimization)
 {
-  const n1 = 500;
+  // Warm up JIT
+  html2json('<div>'.repeat(500) + '</x>'.repeat(500));
+
+  const n1 = 2000;
   const input1 = '<div>'.repeat(n1) + '</x>'.repeat(n1);
   const t1Start = process.hrtime.bigint();
   html2json(input1);
   const t1End = process.hrtime.bigint();
-  const dur1 = Number(t1End - t1Start);
+  const ms1 = Math.max(Number(t1End - t1Start) / 1e6, 0.01);
 
-  const n2 = 2000;
+  const n2 = 8000; // 4x input size
   const input2 = '<div>'.repeat(n2) + '</x>'.repeat(n2);
   const t2Start = process.hrtime.bigint();
   html2json(input2);
   const t2End = process.hrtime.bigint();
-  const dur2 = Number(t2End - t2Start);
+  const ms2 = Number(t2End - t2Start) / 1e6;
 
-  // With O(1) openCounts lookup, unmatched closers exit immediately.
-  // Execution time stays well under 100ms even for thousands of elements.
-  assert(dur1 >= 0 && dur2 >= 0, 'unmatched closers benchmark executed');
-  assert(dur2 / 1e6 < 100, `unmatched closers (n=2000) executed in ${(dur2 / 1e6).toFixed(2)}ms (< 100ms)`);
+  // On a quadratic O(N^2) stack scan (2000 vs 8000), 4x input size causes 16x execution time.
+  // With O(1) Map lookup, growth is linear (~4x). We assert ratio < 10x to strictly reject O(N^2).
+  const scalingRatio = ms2 / ms1;
+  assert(
+    scalingRatio < 10,
+    `unmatched closers scale linearly: ratio ${scalingRatio.toFixed(2)}x for 4x input (< 10x, rejecting O(N^2))`
+  );
+  assert(ms2 < 200, `unmatched closers (n=8000) executed in ${ms2.toFixed(2)}ms (< 200ms)`);
+}
+
+// 4u.  Linear time on repeated unterminated processing instructions (noPiTerminator optimization)
+{
+  const n = 10000;
+  const input = '<?a>'.repeat(n);
+  const t0 = process.hrtime.bigint();
+  const r = html2json(input);
+  const t1 = process.hrtime.bigint();
+  const elapsedMs = Number(t1 - t0) / 1e6;
+  assert(
+    r.type === 'document' && elapsedMs < 100,
+    `10k unterminated processing instructions parsed in ${elapsedMs.toFixed(2)}ms (< 100ms)`
+  );
 }
 
 // ============================================================
