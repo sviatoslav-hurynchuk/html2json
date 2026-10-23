@@ -1,48 +1,28 @@
-// ============================================================
-//  html2json.js — Pure JavaScript HTML-to-JSON AST converter
-//
-//  Constraints:
-//    • No DOMParser, no browser DOM APIs, no third-party libs
-//    • MUST NOT crash on any input
-// ============================================================
+// html2json.js — Pure JavaScript HTML-to-JSON AST converter
 
-// -------------------- Constants ----------------------------
-
-/**
- * HTML5 void elements — they never have children and don't need
- * a closing tag.  We also accept the `<tag />` syntax for them.
- */
+// Per HTML5 spec §12.1.2 — the complete list of void elements.
+// These never enter the open-elements stack because they cannot have children.
 const VOID_TAGS = new Set([
   'area', 'base', 'br', 'col', 'embed', 'hr', 'img', 'input',
   'link', 'meta', 'param', 'source', 'track', 'wbr',
 ]);
 
-/**
- * Elements whose inner content must be consumed as raw text
- * until the matching closing tag — we never parse `<` or `>`
- * inside them as HTML markup.
- */
+// Per HTML5 spec §12.2.6.4 — raw text elements.
+// Their content is consumed verbatim until the matching closing tag;
+// any `<` or `>` inside is NOT treated as markup (e.g. JS operators in <script>).
 const RAW_TEXT_TAGS = new Set(['script', 'style', 'textarea']);
 
-// -------------------- Tree helpers -------------------------
-
-/**
- * Append `node` as a child of the element currently on top of
- * the open-elements stack.
- */
 function addChild(stack, node) {
   stack[stack.length - 1].children.push(node);
 }
 
-/**
- * Append a chunk of text to the current parent.
- * Consecutive calls are merged into a single `text` node so
- * the final tree stays compact.
- */
+// Merges consecutive text chunks into one node so that sequences like
+// "3 < 5" (where `<` is rejected as a tag and re-emitted as text)
+// produce a single coherent text node instead of fragmented pieces.
 function addTextChild(stack, text) {
   if (!text) return;
 
-  const parent   = stack[stack.length - 1];
+  const parent    = stack[stack.length - 1];
   const lastChild = parent.children[parent.children.length - 1];
 
   if (lastChild && lastChild.type === 'text') {
@@ -52,39 +32,21 @@ function addTextChild(stack, text) {
   }
 }
 
-/**
- * Close an open element.
- *
- * The stack is searched **top-to-bottom** for a matching tag.
- *   • Found → pop everything from the match upward (handles
- *             the common "forgot to close an inner tag" case).
- *   • Not found → the stray `</tag>` is silently ignored so
- *             we never crash on broken HTML.
- *
- * Index 0 (the document root) is never popped.
- */
+// Searches the stack top-to-bottom.  If a match is found, everything
+// above it is implicitly closed (handles `<b><i>…</b></i>` pattern).
+// If no match exists the stray closer is silently ignored.
+// Index 0 (document root) is never popped — this is the invariant
+// that guarantees we always have a valid parent to attach nodes to.
 function closeTag(stack, tagName) {
   for (let i = stack.length - 1; i >= 1; i--) {
     if (stack[i].tag === tagName) {
-      stack.length = i;          // pop [i … top]
+      stack.length = i;
       return;
     }
   }
-  // no match → ignore the orphan closing tag
 }
 
-// -------------------- Attribute parser ---------------------
-
 /**
- * Parse the attribute list that follows a tag name.
- *
- * Supported syntaxes:
- *   • double-quoted   —  class="card"
- *   • single-quoted   —  class='card'
- *   • unquoted        —  class=card
- *   • boolean         —  disabled        →  { disabled: true }
- *   • URLs w/ specials —  href="https://x.com/a?b=1&c=2"
- *
  * @param {string} html  Full HTML string
  * @param {number} pos   Index right after the tag name
  * @returns {{ attributes: Object, selfClosing: boolean, end: number }}
@@ -96,11 +58,9 @@ function parseAttributes(html, pos) {
   let   selfClosing = false;
 
   while (i < len) {
-    // skip whitespace
     while (i < len && /\s/.test(html[i])) i++;
     if (i >= len) break;
 
-    // end of opening tag
     if (html[i] === '>') { i++; break; }
     if (html[i] === '/' && i + 1 < len && html[i + 1] === '>') {
       selfClosing = true;
@@ -108,40 +68,41 @@ function parseAttributes(html, pos) {
       break;
     }
 
-    // ---- attribute name ----
     const nameStart = i;
     while (i < len && !/[\s=\/>]/.test(html[i])) i++;
     const attrName = html.slice(nameStart, i).toLowerCase();
 
-    if (!attrName) { i++; continue; }   // skip stray characters
+    if (!attrName) { i++; continue; }
 
-    // skip whitespace before a possible `=`
     while (i < len && /\s/.test(html[i])) i++;
 
     if (i < len && html[i] === '=') {
-      // ---- attribute with value ----
-      i++;                                        // skip '='
-      while (i < len && /\s/.test(html[i])) i++;  // skip ws after '='
+      i++;
+      while (i < len && /\s/.test(html[i])) i++;
 
       let value = '';
 
       if (i < len && (html[i] === '"' || html[i] === "'")) {
-        // quoted value
         const quote    = html[i++];
         const valStart = i;
         while (i < len && html[i] !== quote) i++;
         value = html.slice(valStart, i);
-        if (i < len) i++;                          // skip closing quote
+        if (i < len) i++;
       } else {
-        // unquoted value — ends at whitespace or `>`
+        // Unquoted values terminate at whitespace or `>` (HTML5 spec §12.1.2.3)
         const valStart = i;
         while (i < len && !/[\s>]/.test(html[i])) i++;
         value = html.slice(valStart, i);
+        // Trailing slash in `<img src=pic.png/>` belongs to `/>` self-closing syntax
+        if (value.endsWith('/') && i < len && html[i] === '>') {
+          value = value.slice(0, -1);
+          selfClosing = true;
+        }
       }
 
       attributes[attrName] = value;
     } else {
-      // boolean attribute (no `=`)
+      // Boolean attribute — per spec, presence alone implies `true`
       attributes[attrName] = true;
     }
   }
@@ -149,16 +110,8 @@ function parseAttributes(html, pos) {
   return { attributes, selfClosing, end: i };
 }
 
-// -------------------- Whitespace filter --------------------
-
-/**
- * Remove text nodes that consist **entirely** of whitespace /
- * newlines (inter-element formatting).  Text that contains at
- * least one visible character is kept untouched.
- *
- * Uses an iterative stack to avoid call-stack overflow on
- * deeply nested documents.
- */
+// Iterative (not recursive) to avoid call-stack overflow
+// on adversarial deeply-nested input.
 function filterWhitespace(root) {
   const queue = [root];
 
@@ -167,10 +120,7 @@ function filterWhitespace(root) {
     if (!node.children) continue;
 
     node.children = node.children.filter(function (child) {
-      if (child.type === 'text' && /^\s+$/.test(child.content)) {
-        return false;   // drop whitespace-only node
-      }
-      return true;
+      return !(child.type === 'text' && /^\s+$/.test(child.content));
     });
 
     for (let i = 0; i < node.children.length; i++) {
@@ -181,53 +131,40 @@ function filterWhitespace(root) {
   }
 }
 
-// -------------------- Main parser --------------------------
-
 /**
  * Convert an HTML string into a JSON AST.
  *
- * === Node types ===
- *
- *  Document : { type:"document", children:[] }
- *  Element  : { type:"element",  tag, attributes, children, selfClosing? }
- *  Text     : { type:"text",     content }
- *  Comment  : { type:"comment",  content }
- *  Doctype  : { type:"doctype",  content }
- *  CDATA    : { type:"cdata",    content }
- *
  * @param  {string} htmlText  Raw HTML string
- * @return {Object}           JSON AST
+ * @return {Object}           JSON AST with `type: "document"` root
  */
 function html2json(htmlText) {
 
-  // ---- input validation (MUST NOT crash) ----
   if (htmlText == null || typeof htmlText !== 'string') {
     return { type: 'document', children: [] };
   }
 
-  // Top-level try/catch — ultimate safety net
+  // Top-level try/catch: no matter what pathological input is thrown at us,
+  // we return a valid document object instead of propagating an exception.
   try {
     const root  = { type: 'document', children: [] };
-    const stack = [root];          // open-elements stack; root never pops
+    const stack = [root];
     let   pos   = 0;
     const len   = htmlText.length;
 
     while (pos < len) {
 
-      // ============== Plain text ==============
+      // ── Text ──
       if (htmlText[pos] !== '<') {
         const nextLT = htmlText.indexOf('<', pos);
-        const text   = nextLT === -1
-          ? htmlText.slice(pos)
-          : htmlText.slice(pos, nextLT);
-        addTextChild(stack, text);
+        addTextChild(
+          stack,
+          nextLT === -1 ? htmlText.slice(pos) : htmlText.slice(pos, nextLT)
+        );
         pos = nextLT === -1 ? len : nextLT;
         continue;
       }
 
-      // We are at `<` — determine what construct follows.
-
-      // ============== Comment  <!-- … --> ==============
+      // ── Comment <!--…--> ──
       if (htmlText.startsWith('<!--', pos)) {
         const endIdx = htmlText.indexOf('-->', pos + 4);
         addChild(stack, {
@@ -240,7 +177,7 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ============== Doctype  <!DOCTYPE …> ==============
+      // ── Doctype ──
       if (/^<!doctype[\s>]/i.test(htmlText.slice(pos, pos + 11))) {
         const endIdx = htmlText.indexOf('>', pos);
         const raw    = endIdx === -1
@@ -251,7 +188,7 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ============== CDATA  <![CDATA[ … ]]> ==============
+      // ── CDATA ──
       if (htmlText.startsWith('<![CDATA[', pos)) {
         const endIdx = htmlText.indexOf(']]>', pos + 9);
         addChild(stack, {
@@ -264,14 +201,14 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ============== Unknown <! … > declaration ==============
+      // ── Unknown `<!…>` (SGML relics like <!ENTITY>) — skip gracefully ──
       if (pos + 1 < len && htmlText[pos + 1] === '!') {
         const endIdx = htmlText.indexOf('>', pos);
         pos = endIdx === -1 ? len : endIdx + 1;
         continue;
       }
 
-      // ============== Processing instruction <? … ?> ==============
+      // ── Processing instruction `<?…?>` (XML prologue etc.) ──
       if (pos + 1 < len && htmlText[pos + 1] === '?') {
         const piEnd = htmlText.indexOf('?>', pos + 2);
         if (piEnd !== -1) {
@@ -283,14 +220,16 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ============== Closing tag  </…> ==============
+      // ── Closing tag ──
       if (pos + 1 < len && htmlText[pos + 1] === '/') {
         const endIdx = htmlText.indexOf('>', pos);
         if (endIdx === -1) {
-          // malformed — treat rest of string as text
+          // Unterminated closing tag at EOF — emit remainder as text
+          // rather than silently swallowing characters.
           addTextChild(stack, htmlText.slice(pos));
           pos = len;
         } else {
+          // split(/[\s\/]/) handles malformed closers like `</div  >` or `</br/>`
           const tagName = htmlText.slice(pos + 2, endIdx)
             .trim()
             .split(/[\s\/]/)[0]
@@ -301,27 +240,25 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ============== Opening tag  <tag …> ==============
+      // ── Opening tag ──
 
       let i = pos + 1;
 
-      // tag name must start with a letter; otherwise treat `<` as text
+      // Per HTML5 spec, a tag name must begin with an ASCII alpha character.
+      // Anything else (e.g. `3 < 5`) is not a tag — emit `<` as literal text.
       if (i >= len || !/[a-zA-Z]/.test(htmlText[i])) {
         addTextChild(stack, '<');
         pos++;
         continue;
       }
 
-      // read tag name (letters, digits, hyphens for custom elements,
-      // colons for XML namespaces)
       const nameStart = i;
+      // Hyphens for custom elements (`<my-widget>`), colons for XML namespaces (`<svg:rect>`)
       while (i < len && /[a-zA-Z0-9\-:]/.test(htmlText[i])) i++;
       const tagName = htmlText.slice(nameStart, i).toLowerCase();
 
-      // parse attributes + detect `/>` self-closing syntax
       const { attributes, selfClosing, end } = parseAttributes(htmlText, i);
 
-      // build the node
       const node = {
         type:       'element',
         tag:        tagName,
@@ -329,7 +266,6 @@ function html2json(htmlText) {
         children:   [],
       };
 
-      // ---- void / self-closing element ----
       if (selfClosing || VOID_TAGS.has(tagName)) {
         node.selfClosing = true;
         addChild(stack, node);
@@ -337,17 +273,17 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ---- raw-text element (<script>, <style>, <textarea>) ----
       if (RAW_TEXT_TAGS.has(tagName)) {
         addChild(stack, node);
 
-        // find the matching closing tag (case-insensitive)
+        // Case-insensitive search for closing tag.
+        // We intentionally do NOT push onto stack — raw-text elements
+        // are closed here immediately, not via the normal closeTag flow.
         const closeRe   = new RegExp('<\\/' + tagName + '\\s*>', 'i');
         const remaining = htmlText.slice(end);
         const match     = closeRe.exec(remaining);
 
         if (!match) {
-          // no closing tag → rest of the string is raw content
           const raw = htmlText.slice(end);
           if (raw) node.children.push({ type: 'text', content: raw });
           pos = len;
@@ -359,26 +295,21 @@ function html2json(htmlText) {
         continue;
       }
 
-      // ---- normal element ----
       addChild(stack, node);
-      stack.push(node);           // push onto open-elements stack
+      stack.push(node);
       pos = end;
     }
 
-    // ---- post-processing ----
     filterWhitespace(root);
 
     return root;
 
   } catch (_err) {
-    // ultimate crash protection — return a valid empty document
     return { type: 'document', children: [] };
   }
 }
 
-// ============================================================
-//  UI helpers (used by index.html — kept unchanged)
-// ============================================================
+// ── UI helpers (required by index.html) ──
 
 function convertHtml2JsonAndSet() {
   const htmlTextAreaValue = document.getElementById("html").value;
